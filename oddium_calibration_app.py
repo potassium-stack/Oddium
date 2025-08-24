@@ -205,21 +205,6 @@ if len(df):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", data=csv_bytes, file_name="data.csv", mime="text/csv")
 
-# ------------------ Afbeeldingen kleiner tonen ------------------
-st.divider()
-st.subheader("🖼️ Afbeeldingen voorbeeld (mobielvriendelijk)")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.image("https://via.placeholder.com/300x200.png?text=Afbeelding+1", width=250)
-
-with col2:
-    st.image("https://via.placeholder.com/300x200.png?text=Afbeelding+2", width=250)
-
-st.caption("👉 Door `width=250` te gebruiken blijven afbeeldingen overzichtelijk, ook op je telefoon.")
-
-
 # ------------------ Uitslagen bijwerken ------------------
 with st.expander("✅ Uitslagen bijwerken", expanded=False):
     st.caption("Zet open bets op Win/Lose of corrigeer eerdere uitkomsten. Alleen 'Outcome' is bewerkbaar.")
@@ -347,13 +332,15 @@ agg_odds = (df_odds.groupby("odds_bin")
 st.dataframe(agg_odds, use_container_width=True)
 
 st.markdown("**ROI per odds-bucket**")
-fig2 = plt.figure()
+fig2 = plt.figure(figsize=(4, 3), dpi=150)  # kleiner canvas
 plt.bar(agg_odds["odds_bin"].astype(str), agg_odds["ROI %"])
-plt.axhline(0, linestyle="--")
+plt.axhline(0, linestyle="--", linewidth=1)
 plt.xticks(rotation=30, ha="right")
 plt.ylabel("ROI %")
-plt.grid(axis="y", linestyle=":")
-st.pyplot(fig2, clear_figure=True)
+plt.grid(axis="y", linestyle=":", linewidth=0.5)
+plt.tight_layout()
+st.pyplot(fig2, clear_figure=True, use_container_width=False)  # niet rekken naar volle breedte
+
 
 # ------------------ EV vs Realized ------------------
 st.divider()
@@ -378,14 +365,22 @@ c2.metric("Gerealiseerd resultaat (units)", f"{tot_real:.2f}")
 c3.metric("Verschil (units)", f"{(tot_real - tot_ev):.2f}")
 
 st.markdown("**Scatter: voorspelde kans vs. realized/EV** (per bet)")
-fig3 = plt.figure()
-plt.scatter(df_eval["pred_prob"], df_eval["realized_per_stake"], label="Realized per stake", alpha=0.7)
-plt.scatter(df["pred_prob"], df["theoretical_ev_per_stake"], label="EV per stake", alpha=0.7, marker="x")
+fig3 = plt.figure(figsize=(4, 3), dpi=150)  # kleiner canvas
+plt.scatter(
+    df_eval["pred_prob"], df_eval["realized_per_stake"],
+    label="Realized per stake", alpha=0.7, s=18  # kleinere markers
+)
+plt.scatter(
+    df["pred_prob"], df["theoretical_ev_per_stake"],
+    label="EV per stake", alpha=0.7, marker="x", s=28  # kleiner kruisje
+)
 plt.xlabel("Voorspelde kans")
 plt.ylabel("Winst per stake (units)")
-plt.legend()
-plt.grid(True, linestyle=":")
-st.pyplot(fig3, clear_figure=True)
+plt.legend(fontsize=8)
+plt.grid(True, linestyle=":", linewidth=0.5)
+plt.tight_layout()
+st.pyplot(fig3, clear_figure=True, use_container_width=False)  # niet rekken naar volle breedte
+
 
 
 # ------------------ Filters & Export ------------------
