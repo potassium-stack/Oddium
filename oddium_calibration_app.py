@@ -8,6 +8,9 @@ import streamlit as st
 from sklearn.metrics import brier_score_loss, log_loss
 import matplotlib.pyplot as plt
 from pathlib import Path
+import requests
+from pathlib import Path
+
 
 st.set_page_config(page_title="Oddium Calibration & ROI", layout="wide")
 
@@ -184,6 +187,9 @@ def ensure_start_balance(ledger_df, default_start=10.0):
 
 # ------------------ UI ------------------
 st.title("📈 Oddium – Calibratie, ROI & Balans")
+tab_dashboard, tab_live = st.tabs(["📊 Dashboard", "🟢 Live scores"])
+
+with tab_dashboard:
 
 # === Data laden + afgeleiden ===
 df = load_data()
@@ -493,3 +499,199 @@ with st.expander("Filter op datum", expanded=False):
         )
 
 st.caption("Tip: `pred_prob` mag als percentage of fractie. Odds in decimaal. Outcome: Win=1, Lose=0 of leeg (Nog onbekend).")
+
+with tab_live:
+    st.subheader("🟢 Live scores – watchlist (gratis providers)")
+
+    WATCHLIST_PATH = Path("watchlist.csv")
+
+    def load_watchlist():
+        if not WATCHLIST_PATH.exists():
+            return pd.DataFrame(columns=["event","home","away","kickoff","provider","match_id"])
+        dfw = pd.read_csv(WATCHLIST_PATH)
+        for c in ["event","home","away","provider","match_id"]:
+            if c not in dfw.columns: dfw[c] = ""
+        dfw["kickoff"] = pd.to_datetime(dfw.get("kickoff"), errors="coerce")
+        return dfw
+
+    def save_watchlist(dfw):
+        dfw.to_csv(WATCHLIST_PATH, index=False)
+
+    dfw = load_watchLIST() if 'load_watchLIST' in globals() else load_watchlist()  # guard vs. typos
+    dfw = load_watchlist()
+
+    st.caption("Voeg wedstrijden toe aan je watchlist. Kies daarna 'Handmatig', 'Football-Data.org' of 'TheSportsDB' (allemaal gratis).")
+
+    # Snel open bets aanbieden als suggestie
+    try:
+        df_open = df[df["outcome"].isna()].copy()
+    except Exception:
+        df_open = pd.DataFrame(columns=["event"])
+    suggestions = df_open["event"].dropna().unique().tolist()
+
+    col_add1, col_add2 = st.columns([1,1])
+    with col_add1:
+        sel = st.multiselect("Kies events om toe te voegen (uit open bets)", options=suggestions, default=[])
+    with col_add2:
+        st.markdown("&nbsp;")
+        if st.button("➕ Toevoegen aan watchlist", use_container_width=True, disabled=(len(sel)==0)):
+            base = dfw if len(dfw) else pd.DataFrame(columns=["event","home","away","kickoff","provider","match_id"])
+            new_rows = []
+            for e in sel:
+                parts = e.split("-")
+                home = parts[0].strip() if len(parts) >= 1 else ""
+                away = parts[1].strip() if len(parts) >= 2 else ""
+                new_rows.append({
+                    "event": e.strip(),
+                    "home": home,
+                    "away": away,
+                    "kickoff": pd.NaT,
+                    "provider": "",
+                    "match_id": ""
+                })
+            dfw = pd.concat([base, pd.DataFrame(new_rows)], ignore_index=True)
+            dfw = dfw.drop_duplicates(subset=["event"], keep="last")
+            save_watchlist(dfw)
+            st.success(f"{len(new_rows)} toegevoegd.")
+
+    st.markdown("### ✍️ Watchlist bewerken")
+    st.caption("Vul hier (of corrigeer) home/away/kickoff/provider/match_id. Providers: 'football-data' of 'thesportsdb'.")
+    edited = st.data_editor(
+        dfw,
+        use_container_width=True,
+        height=280,
+        column_config={
+            "kickoff": st.column_config.DatetimeColumn("Kickoff (optioneel)"),
+            "provider": st.column_config.SelectboxColumn("Provider", options=["","football-data","thesportsdb"]),
+        },
+        key="watchlist_editor_live"
+    )
+    if st.button("💾 Watchlist opslaan", use_container_width=True):
+        save_watchlist(edited)
+        st.success("Watchlist opgeslagen.")
+        dfw = edited.copy()
+
+    st.divider()
+    st.markdown("### 🔄 Live scores ophalen (gratis)")
+
+    provider = st.selectbox("Kies provider", ["Handmatig", "Football-Data.org (gratis)", "TheSportsDB (gratis)"])
+    api_key = ""
+    if provider != "Handmatig":
+        api_key = st.text_input("API key (wordt niet opgeslagen)", type="password")
+
+    refresh = st.button("🔃 Nu verversen", type="primary")
+
+    # ------------- Gratis providers -------------
+    # Football-Data.org v4 — header: X-Auth-Token
+    # Docs: https://docs.football-data.org/ (v4); Match resource & live status. 
+    def fetch_fd_live(home, away, token):
+        try:
+            # haal todays matches op en match op teamnaam
+            url = "https://api.football-data.org/v4/matches"
+            headers = {"X-Auth-Token": token}
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            # filter op live/IN_PLAY/PAUSED/FINISHED om toch nuttig te zijn
+            best = None
+            for m in data.get("matches", []):
+                th = (m.get("homeTeam", {}) or {}).get("name","").strip().lower()
+                ta = (m.get("awayTeam", {}) or {}).get("name","").strip().lower()
+                if home and away and th.startswith(home.lower()) and ta.startswith(away.lower()):
+                    best = m; break
+                # fallback: match op event string komt later
+            if not best:
+                return None
+            sc = (best.get("score") or {})
+            full = (sc.get("fullTime") or {})
+            live = (sc.get("halfTime") or {})
+            status = best.get("status","—")
+            # kies live score waar beschikbaar
+            h = sc.get("fullTime",{}).get("home", None) if status in ("FINISHED",) else sc.get("live",{}).get("home", None)
+            a = sc.get("fullTime",{}).get("away", None) if status in ("FINISHED",) else sc.get("live",{}).get("away", None)
+            # fallback: use score.fullTime if present, else 0/None
+            if h is None or a is None:
+                h = (full.get("home") if full.get("home") is not None else None)
+                a = (full.get("away") if full.get("away") is not None else None)
+            return {"home": h, "away": a, "status": status}
+        except Exception:
+            return None
+
+    # TheSportsDB — needs key; free tier available.
+    # Docs: https://www.thesportsdb.com/documentation
+    def fetch_tsdb_live(home, away, key):
+        try:
+            # strategy: search by team name then check events today
+            # 1) find league/match by name is messy; as a simple demo we query "livescore" and try to match team strings
+            url = f"https://www.thesportsdb.com/api/v1/json/{key}/livescore.php?s=Soccer"
+            r = requests.get(url, timeout=10)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            events = (data or {}).get("events", []) or []
+            target = None
+            h_low, a_low = home.lower(), away.lower()
+            for ev in events:
+                th = (ev.get("strHomeTeam") or "").lower()
+                ta = (ev.get("strAwayTeam") or "").lower()
+                if th.startswith(h_low) and ta.startswith(a_low):
+                    target = ev; break
+            if not target:
+                return None
+            # scores
+            h = target.get("intHomeScore")
+            a = target.get("intAwayScore")
+            status = target.get("strStatus") or target.get("strProgress") or "LIVE"
+            h = int(h) if h is not None else None
+            a = int(a) if a is not None else None
+            return {"home": h, "away": a, "status": status}
+        except Exception:
+            return None
+
+    # ------------- Render kaarten -------------
+    def render_card(row, score_home=None, score_away=None, status="—"):
+        st.markdown(
+            f"""
+<div style="border:1px solid #e5e7eb; border-radius:12px; padding:12px; margin-bottom:10px;">
+  <div style="font-weight:700; font-size:16px;">{row.get('event','(onbekend)')}</div>
+  <div style="opacity:.8; font-size:12px; margin-bottom:6px;">
+    {row.get('home','?')} vs {row.get('away','?')}
+    {" • " + (row.get('kickoff').strftime("%Y-%m-%d %H:%M") if isinstance(row.get('kickoff'), pd.Timestamp) and not pd.isna(row.get('kickoff')) else "")}
+  </div>
+  <div style="display:flex; gap:16px; align-items:center;">
+    <div style="font-size:28px; font-weight:800;">{"" if score_home is None else score_home} – {"" if score_away is None else score_away}</div>
+    <div style="font-size:12px; opacity:.8;">Status: {status}</div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True
+        )
+
+    st.markdown("### 👀 Jouw watchlist")
+    if len(dfw) == 0:
+        st.info("Nog geen wedstrijden in de watchlist. Voeg ze hierboven toe.")
+    else:
+        for _, r in dfw.iterrows():
+            h, a, stat = None, None, "—"
+            if provider == "Handmatig":
+                # geen fetch, alleen kaart tonen
+                pass
+            elif provider.startswith("Football-Data") and api_key:
+                res = fetch_fd_live(r.get("home",""), r.get("away",""), api_key)
+                if res: h, a, stat = res["home"], res["away"], res["status"]
+            elif provider.startswith("TheSportsDB") and api_key:
+                res = fetch_tsdb_live(r.get("home",""), r.get("away",""), api_key)
+                if res: h, a, stat = res["home"], res["away"], res["status"]
+
+            # Als je handmatig wil invullen (ook als fetch niets oplevert)
+            c1, c2, c3, c4 = st.columns([3,1,1,1])
+            with c1:
+                render_card(r, h, a, stat)
+            with c2:
+                h_manual = st.number_input(f"{r.get('event','?')} — Home", min_value=0, step=1, value=int(h) if isinstance(h,int) else 0, key=f"h_{_}")
+            with c3:
+                a_manual = st.number_input(f"{r.get('event','?')} — Away", min_value=0, step=1, value=int(a) if isinstance(a,int) else 0, key=f"a_{_}")
+            with c4:
+                st.text_input("Status", value=stat or "", key=f"s_{_}")
+
