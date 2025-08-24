@@ -231,10 +231,14 @@ start_amt = current_start_amount(ledger, default_start=10.0)
 deposits_total = sum_deposits(ledger)
 realized_profit_total = float((df_eval["realized_per_stake"] * df_eval["stake"]).sum()) if len(df_eval) else 0.0
 
-# Nieuw: splits balans in beschikbaar vs. incl. open
+# Gespeeld saldo (alleen afgeronde bets)
+played_balance = start_amt + deposits_total + realized_profit_total
+
+# Openstaande inzetten
 open_stake_total = float(df[df["outcome"].isna()]["stake"].sum())
-available_balance = start_amt + deposits_total + realized_profit_total          # = wat al gespeeld/afgerond is
-gross_balance      = available_balance + open_stake_total                       # = incl. open inzetten
+
+# Totale bankroll (gespeeld + open inzetten)
+total_balance = played_balance + open_stake_total
 
 # ── BALANS-BANNER ──
 st.markdown(
@@ -242,12 +246,12 @@ st.markdown(
 <div style="padding:16px; background:#0f172a; color:#fff; border-radius:14px; margin-bottom:12px;">
   <div style="display:flex; gap:16px; justify-content:space-between; align-items:center; flex-wrap:wrap;">
     <div style="flex:1; min-width:240px; text-align:center;">
-      <div style="font-size:14px; opacity:.85;">Beschikbaar saldo (gerealiseerd)</div>
-      <div style="font-size:44px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {available_balance:,.2f}</div>
+      <div style="font-size:14px; opacity:.85;">Gespeeld saldo (afgerond)</div>
+      <div style="font-size:44px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {played_balance:,.2f}</div>
     </div>
     <div style="flex:1; min-width:240px; text-align:center;">
-      <div style="font-size:14px; opacity:.85;">Totaal (incl. open inzetten)</div>
-      <div style="font-size:32px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {gross_balance:,.2f}</div>
+      <div style="font-size:14px; opacity:.85;">Totale bankroll (incl. open)</div>
+      <div style="font-size:44px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {total_balance:,.2f}</div>
       <div style="font-size:12px; opacity:.85;">Open inzet: € {open_stake_total:,.2f}</div>
     </div>
   </div>
@@ -258,6 +262,7 @@ st.markdown(
 """,
     unsafe_allow_html=True
 )
+
 
 # ───────────────── Invoerformulier: Nieuwe bet toevoegen ─────────────────
 st.divider()
