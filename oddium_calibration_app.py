@@ -200,104 +200,105 @@ df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r[
 df_eval = df.dropna(subset=["outcome"]).copy()
 
 # === Balans & stortingen (bovenaan) ===
-st.subheader("💼 Balans & stortingen")
+# === Balans bovenaan (groot) + ingestorte secties ===
 
-ledger = load_ledger()
-start_default = current_start_amount(ledger, default_start=10.0)
+# Ledger helpers blijven hetzelfde (load_ledger/save_ledger/etc.)
+def ensure_start_balance(ledger_df, default_start=10.0):
+    """Zorg dat er altijd een startregel is. Voeg 'start' toe als die ontbreekt."""
+    if (ledger_df["type"] == "start").any():
+        return ledger_df
+    new_row = pd.DataFrame([{
+        "timestamp": pd.Timestamp.now(),
+        "type": "start",
+        "amount": float(default_start),
+        "note": "auto start"
+    }])
+    return pd.concat([ledger_df, new_row], ignore_index=True)
 
-colS, colD = st.columns(2)
-with colS:
-    new_start = st.number_input("Startbalans (EUR)", min_value=0.0, step=1.0, value=float(start_default))
-    if st.button("Opslaan/Reset startbalans", use_container_width=True):
-        # verwijder bestaande 'start' regels en voeg nieuwe toe
-        ledger = ledger[ledger["type"]!="start"].copy()
-        ledger = pd.concat([ledger, pd.DataFrame([{
-            "timestamp": pd.Timestamp.now(),
-            "type": "start",
-            "amount": float(new_start),
-            "note": "reset start"
-        }])], ignore_index=True)
-        save_ledger(ledger)
-        st.success("Startbalans opgeslagen.")
+# ── bereken eerst EV/realized en df_eval (laat jouw bestaande code zo):
+# df = load_data()
+# df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)
+# df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
+# df_eval = df.dropna(subset=["outcome"]).copy()
 
-with colD:
-    dep_amount = st.number_input("Nieuwe storting (EUR)", min_value=0.0, step=1.0, value=0.0)
-    dep_note = st.text_input("Opmerking (optioneel)", "")
-    if st.button("➕ Storten", use_container_width=True, disabled=(dep_amount<=0.0)):
-        ledger = pd.concat([ledger, pd.DataFrame([{
-            "timestamp": pd.Timestamp.now(),
-            "type": "deposit",
-            "amount": float(dep_amount),
-            "note": dep_note
-        }])], ignore_index=True)
-        save_ledger(ledger)
-        st.success("Storting toegevoegd.")
+# Ledger laden + start afdwingen (default €10)
+ledger = ensure_start_balance(load_ledger(), default_start=10.0)
 
-# Balans berekenen
-start_amt = current_start_amount(load_ledger(), default_start=10.0)
-deposits_total = sum_deposits(load_ledger())
-realized_profit_total = float((df_eval["realized_per_stake"] * df_eval["stake"]).sum())
+# Hulpgetallen
+start_amt = current_start_amount(ledger, default_start=10.0)
+deposits_total = sum_deposits(ledger)
+realized_profit_total = float((df_eval["realized_per_stake"] * df_eval["stake"]).sum()) if len(df_eval) else 0.0
 current_balance = start_amt + deposits_total + realized_profit_total
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Huidige balans", f"€ {current_balance:,.2f}")
-m2.metric("Startbalans", f"€ {start_amt:,.2f}")
-m3.metric("Totaal gestort", f"€ {deposits_total:,.2f}")
-m4.metric("Gerealiseerde winst", f"€ {realized_profit_total:,.2f}")
+# ── GROTE BALANS-BANNER BOVENAAN ──
+st.markdown(
+    f"""
+<div style="padding:16px; background:#0f172a; color:#fff; border-radius:14px; text-align:center; margin-bottom:12px;">
+  <div style="font-size:14px; opacity:.85;">Huidige balans</div>
+  <div style="font-size:48px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {current_balance:,.2f}</div>
+  <div style="font-size:12px; opacity:.85;">
+    Start: €{start_amt:,.2f} • Gestort: €{deposits_total:,.2f} • Gerealiseerde winst: €{realized_profit_total:,.2f}
+  </div>
+</div>
+""",
+    unsafe_allow_html=True
+)
 
-# Winst per maand & week
-if len(df_eval):
-    df_eval = df_eval.copy()
-    df_eval["profit"] = df_eval["realized_per_stake"] * df_eval["stake"]
+# ── Sectie: Startbalans & stortingen (INGEKLAPT, NIET standaard zichtbaar) ──
+with st.expander("💼 Startbalans & stortingen (klik om te openen)", expanded=False):
+    c1, c2 = st.columns(2)
 
-    st.markdown("**📅 Winst per maand**")
-    monthly = (df_eval
-               .assign(month=lambda x: x["timestamp"].dt.to_period("M").astype(str))
-               .groupby("month")["profit"].sum().reset_index().rename(columns={"month":"Maand","profit":"Winst (€)"}))
-    st.dataframe(monthly, use_container_width=True, height=180)
+    with c1:
+        new_start = st.number_input("Startbalans (EUR)", min_value=0.0, step=1.0, value=float(start_amt))
+        if st.button("Opslaan/Reset startbalans", use_container_width=True):
+            # verwijder bestaande startregels en zet nieuwe
+            led = load_ledger()
+            led = led[led["type"] != "start"].copy()
+            led = pd.concat([led, pd.DataFrame([{
+                "timestamp": pd.Timestamp.now(),
+                "type": "start",
+                "amount": float(new_start),
+                "note": "reset start"
+            }])], ignore_index=True)
+            save_ledger(led)
+            st.success("Startbalans opgeslagen. Herlaad de pagina voor update.")
 
-    st.markdown("**🗓️ Winst per week**")
-    weekly = (df_eval
-              .assign(week=lambda x: x["timestamp"].dt.to_period("W").astype(str))
-              .groupby("week")["profit"].sum().reset_index().rename(columns={"week":"Week","profit":"Winst (€)"}))
-    st.dataframe(weekly, use_container_width=True, height=180)
-else:
-    st.info("Nog geen gerealiseerde winst: vul eerst uitslagen in.")
+    with c2:
+        dep_amount = st.number_input("Nieuwe storting (EUR)", min_value=0.0, step=1.0, value=0.0)
+        dep_note = st.text_input("Opmerking (optioneel)", "")
+        if st.button("➕ Storten", use_container_width=True, disabled=(dep_amount <= 0.0)):
+            led = load_ledger()
+            led = pd.concat([led, pd.DataFrame([{
+                "timestamp": pd.Timestamp.now(),
+                "type": "deposit",
+                "amount": float(dep_amount),
+                "note": dep_note
+            }])], ignore_index=True)
+            save_ledger(led)
+            st.success("Storting toegevoegd. Herlaad de pagina voor update.")
 
-st.divider()
-st.subheader("➕ Nieuwe bet toevoegen")
-with st.expander("Formulier", expanded=True):
-    cols = st.columns(2)
-    event = cols[0].text_input("Event / Wedstrijd", placeholder="E.g. PSV - Ajax (BTTS)")
-    odds = cols[0].number_input("Quotering (decimal)", min_value=1.01, step=0.01, value=2.00)
-    pred_prob = cols[0].number_input("Voorspelde kans", min_value=0.0, step=0.1, value=55.0,
-                                     help="Mag 0–1 (bv. 0.55) of 0–100 (bv. 55).")
-    stake = cols[1].number_input("Inzet (units/€)", min_value=0.01, step=0.5, value=1.0)
-    outcome_str = cols[1].selectbox("Uitkomst", ["Nog onbekend", "Win (1)", "Lose (0)"], index=0)
-    submitted = st.button("Toevoegen", type="primary", use_container_width=True)
+# ── Sectie: Winst per maand & week (INGEKLAPT) ──
+with st.expander("📅 Winst per maand & week (klik om te openen)", expanded=False):
+    if len(df_eval):
+        df_eval2 = df_eval.copy()
+        df_eval2["profit"] = df_eval2["realized_per_stake"] * df_eval2["stake"]
 
-    if submitted:
-        if outcome_str.startswith("Nog"):
-            outcome_val = None  # sla op als NaN
-        else:
-            outcome_val = 1 if "Win" in outcome_str else 0
-        df = add_record(event, odds, pred_prob, stake, outcome_val)
-        st.success("Bet opgeslagen!")
+        st.markdown("**Winst per maand**")
+        monthly = (df_eval2
+                   .assign(month=lambda x: x["timestamp"].dt.to_period("M").astype(str))
+                   .groupby("month")["profit"].sum().reset_index()
+                   .rename(columns={"month": "Maand", "profit": "Winst (€)"}))
+        st.dataframe(monthly, use_container_width=True, height=180)
 
-# dataset opnieuw laden na eventuele toevoeging
-df = load_data()
-# (en opnieuw de derived kolommen)
-df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)
-df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
-df_eval = df.dropna(subset=["outcome"]).copy()
+        st.markdown("**Winst per week**")
+        weekly = (df_eval2
+                  .assign(week=lambda x: x["timestamp"].dt.to_period("W").astype(str))
+                  .groupby("week")["profit"].sum().reset_index()
+                  .rename(columns={"week": "Week", "profit": "Winst (€)"}))
+        st.dataframe(weekly, use_container_width=True, height=180)
+    else:
+        st.info("Nog geen gerealiseerde winst: vul eerst uitslagen in.")
 
-st.divider()
-st.subheader("📚 Dataset")
-st.write(f"Aantal bets (totaal): **{len(df)}** — met uitkomst: **{len(df_eval)}**")
-if len(df):
-    st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True, height=280)
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download CSV", data=csv_bytes, file_name="data.csv", mime="text/csv")
 
 # ------------------ Uitslagen bijwerken ------------------
 with st.expander("✅ Uitslagen bijwerken", expanded=False):
