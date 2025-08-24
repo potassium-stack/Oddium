@@ -230,21 +230,35 @@ ledger = ensure_start_balance(load_ledger(), default_start=10.0)
 start_amt = current_start_amount(ledger, default_start=10.0)
 deposits_total = sum_deposits(ledger)
 realized_profit_total = float((df_eval["realized_per_stake"] * df_eval["stake"]).sum()) if len(df_eval) else 0.0
-current_balance = start_amt + deposits_total + realized_profit_total
 
-# ── GROTE BALANS-BANNER BOVENAAN ──
+# Nieuw: splits balans in beschikbaar vs. incl. open
+open_stake_total = float(df[df["outcome"].isna()]["stake"].sum())
+available_balance = start_amt + deposits_total + realized_profit_total          # = wat al gespeeld/afgerond is
+gross_balance      = available_balance + open_stake_total                       # = incl. open inzetten
+
+# ── BALANS-BANNER ──
 st.markdown(
     f"""
-<div style="padding:16px; background:#0f172a; color:#fff; border-radius:14px; text-align:center; margin-bottom:12px;">
-  <div style="font-size:14px; opacity:.85;">Huidige balans</div>
-  <div style="font-size:48px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {current_balance:,.2f}</div>
-  <div style="font-size:12px; opacity:.85;">
+<div style="padding:16px; background:#0f172a; color:#fff; border-radius:14px; margin-bottom:12px;">
+  <div style="display:flex; gap:16px; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+    <div style="flex:1; min-width:240px; text-align:center;">
+      <div style="font-size:14px; opacity:.85;">Beschikbaar saldo (gerealiseerd)</div>
+      <div style="font-size:44px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {available_balance:,.2f}</div>
+    </div>
+    <div style="flex:1; min-width:240px; text-align:center;">
+      <div style="font-size:14px; opacity:.85;">Totaal (incl. open inzetten)</div>
+      <div style="font-size:32px; font-weight:800; line-height:1; margin:6px 0 2px;">€ {gross_balance:,.2f}</div>
+      <div style="font-size:12px; opacity:.85;">Open inzet: € {open_stake_total:,.2f}</div>
+    </div>
+  </div>
+  <div style="font-size:12px; opacity:.85; text-align:center; margin-top:8px;">
     Start: €{start_amt:,.2f} • Gestort: €{deposits_total:,.2f} • Gerealiseerde winst: €{realized_profit_total:,.2f}
   </div>
 </div>
 """,
     unsafe_allow_html=True
 )
+
 # ───────────────── Invoerformulier: Nieuwe bet toevoegen ─────────────────
 st.divider()
 st.subheader("➕ Nieuwe bet toevoegen")
