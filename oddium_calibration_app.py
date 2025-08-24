@@ -1,7 +1,6 @@
 # oddium_calibration_app.py
 # Streamlit app om voorspelde kansen + odds te tracken, te evalueren op calibratie en ROI.
 import math
-import io
 import datetime as dt
 import numpy as np
 import pandas as pd
@@ -15,27 +14,26 @@ st.set_page_config(page_title="Oddium Calibration & ROI", layout="wide")
 DATA_PATH = Path("data.csv")
 LEDGER_PATH = Path("ledger.csv")
 
-# ------------------ Helpers ------------------
+# ------------------ Helpers: data ------------------
 def load_data():
     try:
         df = pd.read_csv(DATA_PATH)
-        # Backward compatibility & dtypes
+        # timestamps
         if "timestamp" in df.columns:
             df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
         else:
             df["timestamp"] = pd.NaT
 
-        # Normalize columns
-        expected_cols = ["timestamp","event","odds","pred_prob","stake","outcome"]
-        for c in expected_cols:
+        # aliases / ensure cols
+        expected = ["timestamp","event","odds","pred_prob","stake","outcome"]
+        for c in expected:
             if c not in df.columns:
-                # try common aliases
                 aliases = {
-                    "odds":["odd","quote","quotering","decimal_odds"],
-                    "pred_prob":["prob","predicted_prob","kans","percentage","pred%"],
-                    "stake":["bet_size","amount","inzet"],
-                    "outcome":["result","win","hit"],
-                    "event":["match","wedstrijd","game"]
+                    "odds": ["odd","quote","quotering","decimal_odds"],
+                    "pred_prob": ["prob","predicted_prob","kans","percentage","pred%"],
+                    "stake": ["bet_size","amount","inzet"],
+                    "outcome": ["result","win","hit"],
+                    "event": ["match","wedstrijd","game"]
                 }
                 if c in aliases:
                     for a in aliases[c]:
@@ -43,7 +41,6 @@ def load_data():
                             df[c] = df[a]
                             break
                 if c not in df.columns:
-                    # Fill sensible defaults
                     if c == "timestamp":
                         df[c] = pd.NaT
                     elif c == "stake":
@@ -51,43 +48,35 @@ def load_data():
                     else:
                         df[c] = np.nan
 
-        # Ensure numeric types
+        # types
         df["odds"] = pd.to_numeric(df["odds"], errors="coerce")
         df["pred_prob"] = pd.to_numeric(df["pred_prob"], errors="coerce")
         df["stake"] = pd.to_numeric(df["stake"], errors="coerce").fillna(1.0)
 
-        # outcome can be {0,1} or text
+        # outcome normalize
         def to_bin(x):
             if pd.isna(x): return np.nan
             if isinstance(x, str):
                 x = x.strip().lower()
                 if x in ("1","win","w","true","yes","y","hit","goed"): return 1
                 if x in ("0","lose","l","false","no","n","miss","fout"): return 0
-                try:
-                    return int(float(x))
-                except:
-                    return np.nan
-            try:
-                return int(float(x))
-            except:
-                return np.nan
-
+                try: return int(float(x))
+                except: return np.nan
+            try: return int(float(x))
+            except: return np.nan
         df["outcome"] = df["outcome"].apply(to_bin)
 
-        # Normalize prob: accept 0–1 or 0–100
+        # prob 0-1 or 0-100
         if (df["pred_prob"] > 1.01).any():
             df["pred_prob"] = df["pred_prob"] / 100.0
-
-        # Clip to [0,1]
         df["pred_prob"] = df["pred_prob"].clip(0,1)
 
-        # Fill timestamps
+        # timestamps fill
         if df["timestamp"].isna().all():
             df["timestamp"] = pd.Timestamp.now()
         else:
             df["timestamp"] = df["timestamp"].fillna(pd.Timestamp.now())
 
-        # Clean events
         df["event"] = df["event"].fillna("").astype(str)
 
         # outcome mag NaN zijn (open bet); filter pas bij analyses
@@ -96,17 +85,14 @@ def load_data():
     except FileNotFoundError:
         return pd.DataFrame(columns=["timestamp","event","odds","pred_prob","stake","outcome"])
 
-def save_data(df):
+def save_data(df: pd.DataFrame):
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(DATA_PATH, index=False)
 
 def add_record(event, odds, pred_prob, stake, outcome):
     df = load_data()
     now = pd.Timestamp.now()
-    if outcome is None:
-        out = np.nan
-    else:
-        out = 1 if outcome else 0
+    out = np.nan if outcome is None else (1 if outcome else 0)
     row = {
         "timestamp": now,
         "event": event,
@@ -119,10 +105,10 @@ def add_record(event, odds, pred_prob, stake, outcome):
     save_data(df)
     return df
 
+# ------------------ Helpers: metrics/plots ------------------
 def calc_roi(df):
-    # Profit per bet: outcome * (odds-1)*stake - (1 - outcome)*stake
-    prof = df["outcome"] * (df["odds"] - 1.0) * df["stake"] - (1 - df["outcome"]) * df["stake"]
-    return prof.sum() / df["stake"].sum() if df["stake"].sum() > 0 else 0.0
+    prof = df["outcome"]*(df["odds"]-1.0)*df["stake"] - (1-df["outcome"])*df["stake"]
+    return prof.sum()/df["stake"].sum() if df["stake"].sum() > 0 else 0.0
 
 def brier(df):
     try:
@@ -154,17 +140,13 @@ def bin_by_odds(df, edges=(1.01,1.5,2,3,5,10,1000)):
     return df
 
 def ev_per_bet(row):
-    # EV per stake unit: p*(odds-1) - (1-p)
-    p = row["pred_prob"]
-    o = row["odds"]
+    p = row["pred_prob"]; o = row["odds"]
     return p*(o-1) - (1-p)
 
 def realized_per_bet(row):
     return row["outcome"]*(row["odds"]-1) - (1-row["outcome"])
-    
 
-
-# ------- Ledger helpers (startbalans & stortingen) -------
+# ------------------ Helpers: ledger ------------------
 def load_ledger():
     if not LEDGER_PATH.exists():
         return pd.DataFrame(columns=["timestamp","type","amount","note"])
@@ -189,24 +171,7 @@ def current_start_amount(ledger_df, default_start=10.0):
 def sum_deposits(ledger_df):
     return float(ledger_df[ledger_df["type"]=="deposit"]["amount"].sum())
 
-# ------------------ UI ------------------
-st.title("📈 Oddium – Calibratie, ROI & Balans")
-
-# === Data laden ===
-df = load_data()
-
-# === EV & realized per bet eerst berekenen (KeyError fix) ===
-df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)  # per 1 unit stake
-df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
-# Alleen bets met uitkomst voor analyses/statistieken:
-df_eval = df.dropna(subset=["outcome"]).copy()
-
-# === Balans & stortingen (bovenaan) ===
-# === Balans bovenaan (groot) + ingestorte secties ===
-
-# Ledger helpers blijven hetzelfde (load_ledger/save_ledger/etc.)
 def ensure_start_balance(ledger_df, default_start=10.0):
-    """Zorg dat er altijd een startregel is. Voeg 'start' toe als die ontbreekt."""
     if (ledger_df["type"] == "start").any():
         return ledger_df
     new_row = pd.DataFrame([{
@@ -217,40 +182,28 @@ def ensure_start_balance(ledger_df, default_start=10.0):
     }])
     return pd.concat([ledger_df, new_row], ignore_index=True)
 
-# ── bereken eerst EV/realized en df_eval (laat jouw bestaande code zo):
-# df = load_data()
-# df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)
-# df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
-# df_eval = df.dropna(subset=["outcome"]).copy()
+# ------------------ UI ------------------
+st.title("📈 Oddium – Calibratie, ROI & Balans")
 
-# Ledger laden + start afdwingen (default €10)
+# === Data laden + afgeleiden ===
+df = load_data()
+df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)  # EV altijd beschikbaar
+df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
+df_eval = df.dropna(subset=["outcome"]).copy()  # alleen besluiten voor statistiek
+
+# === Balans bovenaan ===
 ledger = ensure_start_balance(load_ledger(), default_start=10.0)
-
-# Hulpgetallen
 start_amt = current_start_amount(ledger, default_start=10.0)
 deposits_total = sum_deposits(ledger)
+realized_profit_total = float((df_eval["realized_per_stake"] * df_eval["stake"]).sum()) if len(df_eval) else 0.0
 
-# Gerealiseerde winst (alleen afgeronde bets)
-realized_profit_total = float(
-    (df_eval["realized_per_stake"] * df_eval["stake"]).sum()
-) if len(df_eval) else 0.0
-
-# Openstaande inzetten (outcome = NaN)
+# Openstaande inzetten en saldi
 open_stake_total = float(df[df["outcome"].isna()]["stake"].sum())
-
-# Gespeeld saldo (definitief afgerond, win of lose)
-played_balance = start_amt + deposits_total + realized_profit_total
-
-# Beschikbaar saldo (zoals bookmaker: afgerond + open inzetten teruggeteld)
-available_balance = played_balance - open_stake_total
-
-# Totale bankroll (incl. open)
-total_balance = played_balance
-
+played_balance = start_amt + deposits_total + realized_profit_total                        # afgerond
+available_balance = played_balance - open_stake_total                                     # zoals bookmaker
+total_balance = played_balance                                                             # totaal bankroll (afgerond)
 
 # ── BALANS-BANNER ──
-st.markdown(
-    f"""
 st.markdown(
     f"""
 <div style="padding:16px; background:#0f172a; color:#fff; border-radius:14px; margin-bottom:12px;">
@@ -273,9 +226,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-)
-
-
 # ───────────────── Invoerformulier: Nieuwe bet toevoegen ─────────────────
 st.divider()
 st.subheader("➕ Nieuwe bet toevoegen")
@@ -292,52 +242,51 @@ with st.expander("Formulier", expanded=True):
     outcome_str = cols[1].selectbox("Uitkomst", ["Nog onbekend", "Win (1)", "Lose (0)"], index=0)
 
     submitted = st.button("Toevoegen", type="primary", use_container_width=True)
-
     if submitted:
         if outcome_str.startswith("Nog"):
-            outcome_val = None  # sla op als NaN
+            outcome_val = None
         else:
             outcome_val = 1 if "Win" in outcome_str else 0
         add_record(event, odds, pred_prob, stake, outcome_val)
         st.success("Bet opgeslagen!")
 
-# Na toevoegen: data opnieuw laden en afgeleide kolommen opnieuw berekenen
+# Data opnieuw inlezen na mogelijke toevoeging
 df = load_data()
 df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)
 df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
 df_eval = df.dropna(subset=["outcome"]).copy()
 
-# ── Sectie: Startbalans & stortingen (INGEKLAPT, NIET standaard zichtbaar) ──
+# ── Sectie: Startbalans & stortingen (INGEKLAPT) ──
 with st.expander("💼 Startbalans & stortingen (klik om te openen)", expanded=False):
     c1, c2 = st.columns(2)
-
+    # laad ledger live
+    _led = ensure_start_balance(load_ledger(), default_start=10.0)
+    cur_start = current_start_amount(_led, default_start=10.0)
     with c1:
-        new_start = st.number_input("Startbalans (EUR)", min_value=0.0, step=1.0, value=float(start_amt))
+        new_start = st.number_input("Startbalans (EUR)", min_value=0.0, step=1.0, value=float(cur_start))
         if st.button("Opslaan/Reset startbalans", use_container_width=True):
-            # verwijder bestaande startregels en zet nieuwe
-            led = load_ledger()
-            led = led[led["type"] != "start"].copy()
-            led = pd.concat([led, pd.DataFrame([{
+            _led = _led[_led["type"]!="start"].copy()
+            _led = pd.concat([_led, pd.DataFrame([{
                 "timestamp": pd.Timestamp.now(),
                 "type": "start",
                 "amount": float(new_start),
                 "note": "reset start"
             }])], ignore_index=True)
-            save_ledger(led)
+            save_ledger(_led)
             st.success("Startbalans opgeslagen. Herlaad de pagina voor update.")
 
     with c2:
         dep_amount = st.number_input("Nieuwe storting (EUR)", min_value=0.0, step=1.0, value=0.0)
         dep_note = st.text_input("Opmerking (optioneel)", "")
         if st.button("➕ Storten", use_container_width=True, disabled=(dep_amount <= 0.0)):
-            led = load_ledger()
-            led = pd.concat([led, pd.DataFrame([{
+            _led = load_ledger()
+            _led = pd.concat([_led, pd.DataFrame([{
                 "timestamp": pd.Timestamp.now(),
                 "type": "deposit",
                 "amount": float(dep_amount),
                 "note": dep_note
             }])], ignore_index=True)
-            save_ledger(led)
+            save_ledger(_led)
             st.success("Storting toegevoegd. Herlaad de pagina voor update.")
 
 # ── Sectie: Winst per maand & week (INGEKLAPT) ──
@@ -362,16 +311,22 @@ with st.expander("📅 Winst per maand & week (klik om te openen)", expanded=Fal
     else:
         st.info("Nog geen gerealiseerde winst: vul eerst uitslagen in.")
 
+# ------------------ Dataset ------------------
+st.divider()
+st.subheader("📚 Dataset")
+st.write(f"Aantal bets (totaal): **{len(df)}** — met uitkomst: **{len(df_eval)}**")
+if len(df):
+    st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True, height=280)
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CSV", data=csv_bytes, file_name="data.csv", mime="text/csv")
 
 # ------------------ Uitslagen bijwerken ------------------
 with st.expander("✅ Uitslagen bijwerken", expanded=False):
     st.caption("Zet open bets op Win/Lose of corrigeer eerdere uitkomsten. Alleen 'Outcome' is bewerkbaar.")
     df_view = df.copy()
-
     def out_to_str(x):
         if pd.isna(x): return "Nog onbekend"
-        return "Win (1)" if int(x) == 1 else "Lose (0)"
-
+        return "Win (1)" if int(x)==1 else "Lose (0)"
     df_view["Outcome"] = df_view["outcome"].apply(out_to_str)
 
     edited = st.data_editor(
@@ -395,14 +350,13 @@ with st.expander("✅ Uitslagen bijwerken", expanded=False):
         df["outcome"] = new_outcomes.values
         save_data(df)
         st.success("Uitslagen bijgewerkt en opgeslagen.")
-        # refresh derived views
+        # refresh derived col
         df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
 
 # ------------------ Kerncijfers ------------------
 st.divider()
 st.subheader("📏 Kerncijfers")
 colA, colB, colC, colD = st.columns(4)
-
 if len(df_eval):
     total_roi = calc_roi(df_eval)
     brier_sc  = brier(df_eval)
@@ -427,13 +381,11 @@ if not len(df_eval):
 st.divider()
 st.subheader("🎯 Calibratie per kans-bin")
 df_prob = bin_by_prob(df_eval, n_bins=10)
-cal = (df_prob
-       .groupby("prob_bin")
+cal = (df_prob.groupby("prob_bin")
        .agg(n=("outcome","count"),
             pred=("pred_prob","mean"),
             obs=("outcome","mean"))
-       .reset_index()
-      )
+       .reset_index())
 cal = cal.dropna(subset=["prob_bin"])
 cal["pred_%"] = cal["pred"] * 100
 cal["obs_%"] = cal["obs"] * 100
@@ -442,8 +394,7 @@ left, right = st.columns([1.1, 1])
 with left:
     st.markdown("**Reliability Plot** (verwacht vs. gezien)")
     fig = plt.figure()
-    x = cal["pred"]
-    y = cal["obs"]
+    x = cal["pred"]; y = cal["obs"]
     plt.plot([0,1],[0,1], linestyle="--")
     plt.plot(x, y, marker="o")
     plt.xlabel("Voorspelde kans")
@@ -487,9 +438,7 @@ agg_odds = (df_odds.groupby("odds_bin")
                 "ROI %": 100 * _calc_roi_group(g),
                 "Avg odds": g["odds"].mean(),
             }))
-            .reset_index()
-           )
-
+            .reset_index())
 st.dataframe(agg_odds, use_container_width=True)
 
 st.markdown("**ROI per odds-bucket**")
@@ -529,7 +478,7 @@ with st.expander("Filter op datum", expanded=False):
     min_date = df["timestamp"].min().date() if not df["timestamp"].isna().all() else dt.date.today()
     max_date = df["timestamp"].max().date() if not df["timestamp"].isna().all() else dt.date.today()
     start, end = st.date_input("Bereik", value=(min_date, max_date))
-    if isinstance(start, tuple):  # streamlit older quirk
+    if isinstance(start, tuple):  # edge case oude streamlit
         start, end = start
     mask = (df["timestamp"].dt.date >= start) & (df["timestamp"].dt.date <= end)
     df_filtered = df[mask].copy()
