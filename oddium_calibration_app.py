@@ -190,7 +190,6 @@ st.title("📈 Oddium – Calibratie, ROI & Balans")
 tab_dashboard, tab_live = st.tabs(["📊 Dashboard", "🟢 Live scores"])
 
 with tab_dashboard:
-with tab_dashboard:
     # === Data laden + afgeleiden ===
     df = load_data()
     df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)  # EV altijd beschikbaar
