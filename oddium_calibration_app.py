@@ -8,10 +8,12 @@ import pandas as pd
 import streamlit as st
 from sklearn.metrics import brier_score_loss, log_loss
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 st.set_page_config(page_title="Oddium Calibration & ROI", layout="wide")
 
-DATA_PATH = "data.csv"
+DATA_PATH = Path("data.csv")
+LEDGER_PATH = Path("ledger.csv")
 
 # ------------------ Helpers ------------------
 def load_data():
@@ -61,7 +63,6 @@ def load_data():
                 x = x.strip().lower()
                 if x in ("1","win","w","true","yes","y","hit","goed"): return 1
                 if x in ("0","lose","l","false","no","n","miss","fout"): return 0
-                # try numeric parse
                 try:
                     return int(float(x))
                 except:
@@ -74,7 +75,6 @@ def load_data():
         df["outcome"] = df["outcome"].apply(to_bin)
 
         # Normalize prob: accept 0–1 or 0–100
-        # If any value > 1.01, assume percentage
         if (df["pred_prob"] > 1.01).any():
             df["pred_prob"] = df["pred_prob"] / 100.0
 
@@ -97,6 +97,7 @@ def load_data():
         return pd.DataFrame(columns=["timestamp","event","odds","pred_prob","stake","outcome"])
 
 def save_data(df):
+    DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(DATA_PATH, index=False)
 
 def add_record(event, odds, pred_prob, stake, outcome):
@@ -118,10 +119,6 @@ def add_record(event, odds, pred_prob, stake, outcome):
     save_data(df)
     return df
 
-def odds_to_implied_prob(odds):
-    # decimal odds -> implied prob without margin
-    return 1.0 / odds if odds and odds > 0 else np.nan
-
 def calc_roi(df):
     # Profit per bet: outcome * (odds-1)*stake - (1 - outcome)*stake
     prof = df["outcome"] * (df["odds"] - 1.0) * df["stake"] - (1 - df["outcome"]) * df["stake"]
@@ -135,30 +132,24 @@ def brier(df):
 
 def logloss(df):
     try:
-        # clip to avoid -inf
         p = np.clip(df["pred_prob"].values, 1e-12, 1-1e-12)
         return float(log_loss(df["outcome"].values, p))
     except Exception:
         return np.nan
 
 def bin_by_prob(df, n_bins=10):
-    # Deciles of predicted probability
-    # Handle duplicates by using qcut with duplicates='drop'
     try:
         df = df.copy()
         df["prob_bin"] = pd.qcut(df["pred_prob"], q=n_bins, labels=False, duplicates="drop")
         return df
     except ValueError:
-        # Not enough unique values
         df = df.copy()
         df["prob_bin"] = 0
         return df
 
 def bin_by_odds(df, edges=(1.01,1.5,2,3,5,10,1000)):
     df = df.copy()
-    labels = []
-    for i in range(len(edges)-1):
-        labels.append(f"[{edges[i]:.2f}, {edges[i+1]:.2f})")
+    labels = [f"[{edges[i]:.2f}, {edges[i+1]:.2f})" for i in range(len(edges)-1)]
     df["odds_bin"] = pd.cut(df["odds"], bins=edges, right=False, labels=labels, include_lowest=True)
     return df
 
@@ -171,11 +162,111 @@ def ev_per_bet(row):
 def realized_per_bet(row):
     return row["outcome"]*(row["odds"]-1) - (1-row["outcome"])
 
-# ------------------ UI ------------------
-st.title("📈 Oddium – Calibratie & ROI Monitor")
-st.caption("Voer je bets in (kans + quotering) en zie calibratie, EV en prestaties per bucket.")
+# ------- Ledger helpers (startbalans & stortingen) -------
+def load_ledger():
+    if not LEDGER_PATH.exists():
+        return pd.DataFrame(columns=["timestamp","type","amount","note"])
+    led = pd.read_csv(LEDGER_PATH)
+    led["timestamp"] = pd.to_datetime(led.get("timestamp"), errors="coerce")
+    led["type"] = led.get("type","").astype(str)
+    led["amount"] = pd.to_numeric(led.get("amount"), errors="coerce").fillna(0.0)
+    led["note"] = led.get("note","").astype(str)
+    return led
 
-with st.expander("➕ Nieuwe bet toevoegen", expanded=True):
+def save_ledger(ledger_df):
+    ledger_df = ledger_df.copy()
+    ledger_df["timestamp"] = pd.to_datetime(ledger_df["timestamp"], errors="coerce").fillna(pd.Timestamp.now())
+    ledger_df.to_csv(LEDGER_PATH, index=False)
+
+def current_start_amount(ledger_df, default_start=10.0):
+    starts = ledger_df[ledger_df["type"]=="start"]["amount"]
+    if len(starts):
+        return float(starts.iloc[-1])
+    return float(default_start)
+
+def sum_deposits(ledger_df):
+    return float(ledger_df[ledger_df["type"]=="deposit"]["amount"].sum())
+
+# ------------------ UI ------------------
+st.title("📈 Oddium – Calibratie, ROI & Balans")
+
+# === Data laden ===
+df = load_data()
+
+# === EV & realized per bet eerst berekenen (KeyError fix) ===
+df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)  # per 1 unit stake
+df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
+# Alleen bets met uitkomst voor analyses/statistieken:
+df_eval = df.dropna(subset=["outcome"]).copy()
+
+# === Balans & stortingen (bovenaan) ===
+st.subheader("💼 Balans & stortingen")
+
+ledger = load_ledger()
+start_default = current_start_amount(ledger, default_start=10.0)
+
+colS, colD = st.columns(2)
+with colS:
+    new_start = st.number_input("Startbalans (EUR)", min_value=0.0, step=1.0, value=float(start_default))
+    if st.button("Opslaan/Reset startbalans", use_container_width=True):
+        # verwijder bestaande 'start' regels en voeg nieuwe toe
+        ledger = ledger[ledger["type"]!="start"].copy()
+        ledger = pd.concat([ledger, pd.DataFrame([{
+            "timestamp": pd.Timestamp.now(),
+            "type": "start",
+            "amount": float(new_start),
+            "note": "reset start"
+        }])], ignore_index=True)
+        save_ledger(ledger)
+        st.success("Startbalans opgeslagen.")
+
+with colD:
+    dep_amount = st.number_input("Nieuwe storting (EUR)", min_value=0.0, step=1.0, value=0.0)
+    dep_note = st.text_input("Opmerking (optioneel)", "")
+    if st.button("➕ Storten", use_container_width=True, disabled=(dep_amount<=0.0)):
+        ledger = pd.concat([ledger, pd.DataFrame([{
+            "timestamp": pd.Timestamp.now(),
+            "type": "deposit",
+            "amount": float(dep_amount),
+            "note": dep_note
+        }])], ignore_index=True)
+        save_ledger(ledger)
+        st.success("Storting toegevoegd.")
+
+# Balans berekenen
+start_amt = current_start_amount(load_ledger(), default_start=10.0)
+deposits_total = sum_deposits(load_ledger())
+realized_profit_total = float((df_eval["realized_per_stake"] * df_eval["stake"]).sum())
+current_balance = start_amt + deposits_total + realized_profit_total
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Huidige balans", f"€ {current_balance:,.2f}")
+m2.metric("Startbalans", f"€ {start_amt:,.2f}")
+m3.metric("Totaal gestort", f"€ {deposits_total:,.2f}")
+m4.metric("Gerealiseerde winst", f"€ {realized_profit_total:,.2f}")
+
+# Winst per maand & week
+if len(df_eval):
+    df_eval = df_eval.copy()
+    df_eval["profit"] = df_eval["realized_per_stake"] * df_eval["stake"]
+
+    st.markdown("**📅 Winst per maand**")
+    monthly = (df_eval
+               .assign(month=lambda x: x["timestamp"].dt.to_period("M").astype(str))
+               .groupby("month")["profit"].sum().reset_index().rename(columns={"month":"Maand","profit":"Winst (€)"}))
+    st.dataframe(monthly, use_container_width=True, height=180)
+
+    st.markdown("**🗓️ Winst per week**")
+    weekly = (df_eval
+              .assign(week=lambda x: x["timestamp"].dt.to_period("W").astype(str))
+              .groupby("week")["profit"].sum().reset_index().rename(columns={"week":"Week","profit":"Winst (€)"}))
+    st.dataframe(weekly, use_container_width=True, height=180)
+else:
+    st.info("Nog geen gerealiseerde winst: vul eerst uitslagen in.")
+
+st.divider()
+st.subheader("➕ Nieuwe bet toevoegen")
+with st.expander("Formulier", expanded=True):
     cols = st.columns(2)
     event = cols[0].text_input("Event / Wedstrijd", placeholder="E.g. PSV - Ajax (BTTS)")
     odds = cols[0].number_input("Quotering (decimal)", min_value=1.01, step=0.01, value=2.00)
@@ -193,15 +284,18 @@ with st.expander("➕ Nieuwe bet toevoegen", expanded=True):
         df = add_record(event, odds, pred_prob, stake, outcome_val)
         st.success("Bet opgeslagen!")
 
+# dataset opnieuw laden na eventuele toevoeging
 df = load_data()
-df_eval = df.dropna(subset=["outcome"])  # alleen bets met uitkomst voor analyses
+# (en opnieuw de derived kolommen)
+df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)
+df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
+df_eval = df.dropna(subset=["outcome"]).copy()
 
 st.divider()
 st.subheader("📚 Dataset")
 st.write(f"Aantal bets (totaal): **{len(df)}** — met uitkomst: **{len(df_eval)}**")
 if len(df):
     st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True, height=280)
-    # Download
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", data=csv_bytes, file_name="data.csv", mime="text/csv")
 
@@ -227,7 +321,7 @@ with st.expander("✅ Uitslagen bijwerken", expanded=False):
                 help="Kies de uitkomst. Laat 'Nog onbekend' staan voor open bets."
             )
         },
-        disabled=["timestamp","event","odds","pred_prob","stake"],  # alleen Outcome bewerkbaar
+        disabled=["timestamp","event","odds","pred_prob","stake"],
         key="editor_outcomes"
     )
 
@@ -237,7 +331,10 @@ with st.expander("✅ Uitslagen bijwerken", expanded=False):
         df["outcome"] = new_outcomes.values
         save_data(df)
         st.success("Uitslagen bijgewerkt en opgeslagen.")
+        # refresh derived views
+        df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
 
+# ------------------ Kerncijfers ------------------
 st.divider()
 st.subheader("📏 Kerncijfers")
 colA, colB, colC, colD = st.columns(4)
@@ -332,56 +429,34 @@ agg_odds = (df_odds.groupby("odds_bin")
 st.dataframe(agg_odds, use_container_width=True)
 
 st.markdown("**ROI per odds-bucket**")
-fig2 = plt.figure(figsize=(4, 3), dpi=150)  # kleiner canvas
+fig2 = plt.figure()
 plt.bar(agg_odds["odds_bin"].astype(str), agg_odds["ROI %"])
-plt.axhline(0, linestyle="--", linewidth=1)
+plt.axhline(0, linestyle="--")
 plt.xticks(rotation=30, ha="right")
 plt.ylabel("ROI %")
-plt.grid(axis="y", linestyle=":", linewidth=0.5)
-plt.tight_layout()
-st.pyplot(fig2, clear_figure=True, use_container_width=False)  # niet rekken naar volle breedte
-
+plt.grid(axis="y", linestyle=":")
+st.pyplot(fig2, clear_figure=True)
 
 # ------------------ EV vs Realized ------------------
 st.divider()
 st.subheader("⚖️ EV vs. Realized (per bet en totaal)")
-
-# EV kan altijd; realized alleen als outcome bekend is
-df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)  # per 1 unit stake
-df["realized_per_stake"] = df.apply(
-    lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1
-)
-
-# Zorg dat df_eval deze kolommen ook heeft
-df_eval = df.dropna(subset=["outcome"]).copy()
-
-tot_ev   = (df["theoretical_ev_per_stake"] * df["stake"]).sum()
+tot_ev = (df["theoretical_ev_per_stake"] * df["stake"]).sum()
 tot_real = (df_eval["realized_per_stake"] * df_eval["stake"]).sum()
-tot_stake = df_eval["stake"].sum()
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Theoretische EV (units)", f"{tot_ev:.2f}")
-c2.metric("Gerealiseerd resultaat (units)", f"{tot_real:.2f}")
-c3.metric("Verschil (units)", f"{(tot_real - tot_ev):.2f}")
+c1.metric("Theoretische EV (units/€)", f"{tot_ev:.2f}")
+c2.metric("Gerealiseerd resultaat (units/€)", f"{tot_real:.2f}")
+c3.metric("Verschil (units/€)", f"{(tot_real - tot_ev):.2f}")
 
 st.markdown("**Scatter: voorspelde kans vs. realized/EV** (per bet)")
-fig3 = plt.figure(figsize=(4, 3), dpi=150)  # kleiner canvas
-plt.scatter(
-    df_eval["pred_prob"], df_eval["realized_per_stake"],
-    label="Realized per stake", alpha=0.7, s=18  # kleinere markers
-)
-plt.scatter(
-    df["pred_prob"], df["theoretical_ev_per_stake"],
-    label="EV per stake", alpha=0.7, marker="x", s=28  # kleiner kruisje
-)
+fig3 = plt.figure()
+plt.scatter(df_eval["pred_prob"], df_eval["realized_per_stake"], label="Realized per stake", alpha=0.7)
+plt.scatter(df["pred_prob"], df["theoretical_ev_per_stake"], label="EV per stake", alpha=0.7, marker="x")
 plt.xlabel("Voorspelde kans")
-plt.ylabel("Winst per stake (units)")
-plt.legend(fontsize=8)
-plt.grid(True, linestyle=":", linewidth=0.5)
-plt.tight_layout()
-st.pyplot(fig3, clear_figure=True, use_container_width=False)  # niet rekken naar volle breedte
-
-
+plt.ylabel("Winst per stake (units/€)")
+plt.legend()
+plt.grid(True, linestyle=":")
+st.pyplot(fig3, clear_figure=True)
 
 # ------------------ Filters & Export ------------------
 st.divider()
