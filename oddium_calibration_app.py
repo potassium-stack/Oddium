@@ -226,6 +226,30 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# ── Lijngrafiek verloop Beschikbaar saldo ──
+st.markdown("### 📈 Verloop van beschikbaar saldo")
+
+if len(df):
+    df_tmp = df.copy()
+    df_tmp["profit"] = df_tmp.apply(
+        lambda r: realized_per_bet(r)*r["stake"] if pd.notna(r["outcome"]) else 0.0, axis=1
+    )
+    daily = (df_tmp.groupby(df_tmp["timestamp"].dt.date)["profit"].sum()
+             .cumsum()
+             .reset_index()
+             .rename(columns={"timestamp":"Datum","profit":"Cumulatieve winst"}))
+    daily["Beschikbaar saldo"] = start_amt + deposits_total + daily["Cumulatieve winst"]
+
+    fig_bal = plt.figure()
+    plt.plot(daily["Datum"], daily["Beschikbaar saldo"], marker="o")
+    plt.xlabel("Datum"); plt.ylabel("Saldo (€)")
+    plt.title("Beschikbaar saldo per dag")
+    plt.xticks(rotation=30, ha="right")
+    plt.grid(True, linestyle=":")
+    st.pyplot(fig_bal, clear_figure=True)
+else:
+    st.info("Nog geen bets ingevoerd → geen verloopgrafiek beschikbaar.")
+
 # ───────────────── Invoerformulier: Nieuwe bet toevoegen ─────────────────
 st.divider()
 st.subheader("➕ Nieuwe bet toevoegen")
@@ -442,13 +466,11 @@ agg_odds = (df_odds.groupby("odds_bin")
 st.dataframe(agg_odds, use_container_width=True)
 
 st.markdown("**ROI per odds-bucket**")
-fig2 = plt.figure()
+fig2 = plt.figure(figsize=(6,4))
 plt.bar(agg_odds["odds_bin"].astype(str), agg_odds["ROI %"])
-plt.axhline(0, linestyle="--")
-plt.xticks(rotation=30, ha="right")
-plt.ylabel("ROI %")
-plt.grid(axis="y", linestyle=":")
+...
 st.pyplot(fig2, clear_figure=True)
+
 
 # ------------------ EV vs Realized ------------------
 st.divider()
@@ -462,14 +484,12 @@ c2.metric("Gerealiseerd resultaat (units/€)", f"{tot_real:.2f}")
 c3.metric("Verschil (units/€)", f"{(tot_real - tot_ev):.2f}")
 
 st.markdown("**Scatter: voorspelde kans vs. realized/EV** (per bet)")
-fig3 = plt.figure()
-plt.scatter(df_eval["pred_prob"], df_eval["realized_per_stake"], label="Realized per stake", alpha=0.7)
-plt.scatter(df["pred_prob"], df["theoretical_ev_per_stake"], label="EV per stake", alpha=0.7, marker="x")
-plt.xlabel("Voorspelde kans")
-plt.ylabel("Winst per stake (units/€)")
-plt.legend()
-plt.grid(True, linestyle=":")
+fig3 = plt.figure(figsize=(6,4))
+plt.scatter(df_eval["pred_prob"], df_eval["realized_per_stake"], ...)
+plt.scatter(df["pred_prob"], df["theoretical_ev_per_stake"], ...)
+...
 st.pyplot(fig3, clear_figure=True)
+
 
 # ------------------ Filters & Export ------------------
 st.divider()
