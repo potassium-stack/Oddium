@@ -161,36 +161,7 @@ def ev_per_bet(row):
 
 def realized_per_bet(row):
     return row["outcome"]*(row["odds"]-1) - (1-row["outcome"])
-    # ───────────────── Invoerformulier: Nieuwe bet toevoegen ─────────────────
-st.divider()
-st.subheader("➕ Nieuwe bet toevoegen")
-with st.expander("Formulier", expanded=True):
-    cols = st.columns(2)
-    event = cols[0].text_input("Event / Wedstrijd", placeholder="E.g. PSV - Ajax (BTTS)")
-    odds = cols[0].number_input("Quotering (decimal)", min_value=1.01, step=0.01, value=2.00)
-    pred_prob = cols[0].number_input(
-        "Voorspelde kans",
-        min_value=0.0, step=0.1, value=55.0,
-        help="Mag 0–1 (bv. 0.55) of 0–100 (bv. 55)."
-    )
-    stake = cols[1].number_input("Inzet (units/€)", min_value=0.01, step=0.5, value=1.0)
-    outcome_str = cols[1].selectbox("Uitkomst", ["Nog onbekend", "Win (1)", "Lose (0)"], index=0)
-
-    submitted = st.button("Toevoegen", type="primary", use_container_width=True)
-
-    if submitted:
-        if outcome_str.startswith("Nog"):
-            outcome_val = None  # sla op als NaN
-        else:
-            outcome_val = 1 if "Win" in outcome_str else 0
-        add_record(event, odds, pred_prob, stake, outcome_val)
-        st.success("Bet opgeslagen!")
-
-# Na toevoegen: data opnieuw laden en afgeleide kolommen opnieuw berekenen
-df = load_data()
-df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)
-df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
-df_eval = df.dropna(subset=["outcome"]).copy()
+    
 
 
 # ------- Ledger helpers (startbalans & stortingen) -------
@@ -274,6 +245,36 @@ st.markdown(
 """,
     unsafe_allow_html=True
 )
+# ───────────────── Invoerformulier: Nieuwe bet toevoegen ─────────────────
+st.divider()
+st.subheader("➕ Nieuwe bet toevoegen")
+with st.expander("Formulier", expanded=True):
+    cols = st.columns(2)
+    event = cols[0].text_input("Event / Wedstrijd", placeholder="E.g. PSV - Ajax (BTTS)")
+    odds = cols[0].number_input("Quotering (decimal)", min_value=1.01, step=0.01, value=2.00)
+    pred_prob = cols[0].number_input(
+        "Voorspelde kans",
+        min_value=0.0, step=0.1, value=55.0,
+        help="Mag 0–1 (bv. 0.55) of 0–100 (bv. 55)."
+    )
+    stake = cols[1].number_input("Inzet (units/€)", min_value=0.01, step=0.5, value=1.0)
+    outcome_str = cols[1].selectbox("Uitkomst", ["Nog onbekend", "Win (1)", "Lose (0)"], index=0)
+
+    submitted = st.button("Toevoegen", type="primary", use_container_width=True)
+
+    if submitted:
+        if outcome_str.startswith("Nog"):
+            outcome_val = None  # sla op als NaN
+        else:
+            outcome_val = 1 if "Win" in outcome_str else 0
+        add_record(event, odds, pred_prob, stake, outcome_val)
+        st.success("Bet opgeslagen!")
+
+# Na toevoegen: data opnieuw laden en afgeleide kolommen opnieuw berekenen
+df = load_data()
+df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)
+df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
+df_eval = df.dropna(subset=["outcome"]).copy()
 
 # ── Sectie: Startbalans & stortingen (INGEKLAPT, NIET standaard zichtbaar) ──
 with st.expander("💼 Startbalans & stortingen (klik om te openen)", expanded=False):
