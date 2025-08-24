@@ -190,8 +190,7 @@ st.title("📈 Oddium – Calibratie, ROI & Balans")
 tab_dashboard, tab_live = st.tabs(["📊 Dashboard", "🟢 Live scores"])
 
 with tab_dashboard:
-
-# === Data laden + afgeleiden ===
+    # === Data laden + afgeleiden ===
 df = load_data()
 df["theoretical_ev_per_stake"] = df.apply(ev_per_bet, axis=1)  # EV altijd beschikbaar
 df["realized_per_stake"] = df.apply(lambda r: realized_per_bet(r) if pd.notna(r["outcome"]) else np.nan, axis=1)
