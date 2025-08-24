@@ -205,6 +205,21 @@ if len(df):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", data=csv_bytes, file_name="data.csv", mime="text/csv")
 
+# ------------------ Afbeeldingen kleiner tonen ------------------
+st.divider()
+st.subheader("🖼️ Afbeeldingen voorbeeld (mobielvriendelijk)")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.image("https://via.placeholder.com/300x200.png?text=Afbeelding+1", width=250)
+
+with col2:
+    st.image("https://via.placeholder.com/300x200.png?text=Afbeelding+2", width=250)
+
+st.caption("👉 Door `width=250` te gebruiken blijven afbeeldingen overzichtelijk, ook op je telefoon.")
+
+
 # ------------------ Uitslagen bijwerken ------------------
 with st.expander("✅ Uitslagen bijwerken", expanded=False):
     st.caption("Zet open bets op Win/Lose of corrigeer eerdere uitkomsten. Alleen 'Outcome' is bewerkbaar.")
